@@ -1,0 +1,491 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Calculator</title>
+  <style>
+    body {
+      display: flex; 
+      justify-content: center; 
+      align-items: flex-start;
+      min-height: 100vh; 
+      margin: 0; 
+      padding: 20px 0; 
+      box-sizing: border-box;
+      background: aqua; 
+      font-family: Arial, sans-serif;
+    }
+    .panel {
+      background: #222; color: white; padding: 20px; border-radius: 10px;
+      width: 330px; box-sizing: border-box;
+    }
+    .hidden { display: none !important; }
+
+    #display {
+      width: 100%; height: 50px; margin-bottom: 10px; font-size: 20px;
+      padding: 5px; text-align: right; border: none; border-radius: 5px;
+      background: white; box-sizing: border-box;
+    }
+    .buttons { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    button {
+      height: 44px; font-size: 16px; border: none; border-radius: 5px;
+      cursor: pointer; background: #444; color: white;
+    }
+    button:hover { background: #666; }
+    .op { background: #ff9500; color: black; }
+    .eq { background: #28a745; grid-column: span 2; }
+    .red { background: #dc3545; }
+
+    .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
+    .tabs button { flex: 1; height: 34px; font-size: 12px; padding: 0; }
+    .tabs button.active { background: #ff9500; color: black; }
+
+    .box { display: flex; gap: 6px; margin-bottom: 8px; }
+    .box input[type="text"] {
+      flex: 1; min-width: 0; padding: 6px; border: none; border-radius: 5px; font-size: 13px;
+    }
+    .box input[type="file"] { flex: 1; min-width: 0; font-size: 12px; color: #ccc; }
+    .box button { height: 32px; font-size: 13px; padding: 0 10px; }
+
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    .card { background: #333; border-radius: 6px; padding: 4px; font-size: 11px; }
+    .thumb {
+      width: 100%; height: 70px; display: flex; align-items: center;
+      justify-content: center; background: #222; border-radius: 4px;
+      font-size: 26px; margin-bottom: 4px; overflow: hidden;
+    }
+    .thumb img { width: 100%; height: 100%; object-fit: cover; }
+    .nm { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 4px; text-align: center; }
+    .acts { display: flex; gap: 3px; }
+    .acts button { flex: 1; height: 24px; font-size: 10px; padding: 0; }
+
+    .status { font-size: 12px; color: #aaa; min-height: 16px; margin: 8px 0; word-break: break-all; }
+    .empty { font-size: 13px; color: #aaa; padding: 10px 0; }
+  </style>
+</head>
+<body>
+
+<!-- Calculator: The normal calculator interface visible to everyone -->
+<div class="panel" id="calc">
+  <input type="text" id="display" disabled>
+  <div class="buttons">
+    <button onclick="clearDisplay()" class="red">C</button>
+    <button onclick="deleteLast()" class="red">X</button>
+    <button onclick="appendValue('/')" class="op">/</button>
+
+    <button onclick="appendValue('7')">7</button>
+    <button onclick="appendValue('8')">8</button>
+    <button onclick="appendValue('9')">9</button>
+    <button onclick="appendValue('*')" class="op">*</button>
+
+    <button onclick="appendValue('4')">4</button>
+    <button onclick="appendValue('5')">5</button>
+    <button onclick="appendValue('6')">6</button>
+    <button onclick="appendValue('-')" class="op">-</button>
+
+    <button onclick="appendValue('1')">1</button>
+    <button onclick="appendValue('2')">2</button>
+    <button onclick="appendValue('3')">3</button>
+    <button onclick="appendValue('+')" class="op">+</button>
+
+    <button onclick="calculate()" class="eq">=</button>
+
+    <button onclick="appendValue('0')">0</button>
+    <button onclick="appendValue('.')">.</button>
+  </div>
+</div>
+
+<!-- Vault: Opens only after entering the correct PIN in the calculator -->
+<div class="panel hidden" id="vault">
+  <div class="tabs" id="tabs"></div>
+
+  <div class="box" id="uploadBox">
+    <input type="file" id="fileInput" multiple>
+    <button onclick="uploadFiles()">Upload</button>
+  </div>
+
+  <div class="box" id="pathBox">
+    <button onclick="pickAndHide()" class="red" style="flex:1">Choose file & Hide from PC</button>
+  </div>
+
+  <div class="box hidden" id="linkBox">
+    <input type="text" id="linkName" placeholder="App name">
+    <input type="text" id="linkUrl" placeholder="https://...">
+    <button onclick="addLink()">Add</button>
+  </div>
+
+  <div class="status" id="status"></div>
+  <div class="grid" id="grid"></div>
+
+  <div class="box" style="margin-top:12px">
+    <button onclick="lockVault()" class="red" style="flex:1">Lock</button>
+  </div>
+</div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const display = $("display");
+
+  const TABS = [
+    ["photo", "Photos"], ["video", "Videos"], ["app", "Apps"],
+    ["file", "Files"], ["hidden", "Hidden"]
+  ];
+
+  const ICONS = { photo: "🖼️", video: "🎬", app: "📱", file: "📄" };
+
+  let token = null;
+  let view = "photo";
+  let setupDone = null; // null = server not available, true = PIN is set, false = first-time setup
+
+  // ----- Server helper -----
+  async function api(path, opts = {}) {
+    const headers = Object.assign({}, opts.headers || {});
+    if (token) headers["Authorization"] = "Bearer " + token;
+
+    const res = await fetch(path, Object.assign({}, opts, { headers }));
+
+    if (res.status === 401 && token) {
+      token = null;
+      lockVault();
+      alert("Session expired. Please enter your PIN again.");
+    }
+
+    return res;
+  }
+
+  async function checkStatus() {
+    try {
+      const r = await fetch("/api/status");
+      setupDone = (await r.json()).setup;
+    } catch {
+      setupDone = null;
+    }
+  }
+
+  // ----- Calculator -----
+  function appendValue(v) { display.value += v; }
+  function clearDisplay() { display.value = ""; }
+  function deleteLast() { display.value = display.value.slice(0, -1); }
+
+  async function calculate() {
+    const entry = display.value;
+    if (!entry) return;
+
+    // First-time setup: The entered value will become the PIN.
+    if (setupDone === false) {
+      if (entry.length < 4) return alert("PIN must be at least 4 characters.");
+
+      const r = await fetch("/api/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: entry })
+      });
+
+      if (r.ok) {
+        setupDone = true;
+        display.value = "";
+        alert("PIN saved successfully. Enter your PIN and press = to open the vault.");
+      } else {
+        alert("Setup failed. Is the backend server running?");
+      }
+      return;
+    }
+
+    // Normal operation: Open the vault if the entered value is the correct PIN.
+    if (setupDone === true) {
+      const r = await fetch("/api/unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin: entry })
+      });
+
+      if (r.ok) {
+        token = (await r.json()).token;
+        display.value = "";
+        openVault();
+        return;
+      }
+    }
+
+    // If the entered value is not a valid PIN, use the normal calculator.
+    try {
+      display.value = eval(entry);
+    } catch {
+      alert("Invalid Expression");
+    }
+  }
+
+  // ----- Vault -----
+  function buildTabs() {
+    const tabs = $("tabs");
+    tabs.innerHTML = "";
+
+    TABS.forEach(([key, label]) => {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.dataset.view = key;
+      b.onclick = () => setView(key);
+      tabs.appendChild(b);
+    });
+  }
+
+  function openVault() {
+    $("calc").classList.add("hidden");
+    $("vault").classList.remove("hidden");
+    buildTabs();
+    setView("photo");
+  }
+
+  function lockVault() {
+    if (token) api("/api/lock", { method: "POST" }).catch(() => {});
+    token = null;
+    $("vault").classList.add("hidden");
+    $("calc").classList.remove("hidden");
+    $("grid").innerHTML = "";
+    $("status").textContent = "";
+    display.value = "";
+  }
+
+  function setView(v) {
+    view = v;
+
+    document.querySelectorAll("#tabs button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.view === v)
+    );
+
+    const isHidden = v === "hidden";
+    $("uploadBox").classList.toggle("hidden", isHidden);
+    $("pathBox").classList.toggle("hidden", isHidden);
+    $("linkBox").classList.toggle("hidden", v !== "app");
+
+    $("fileInput").accept = v === "photo" ? "image/*" : v === "video" ? "video/*" : "";
+
+    loadItems();
+  }
+
+  async function loadItems() {
+    const grid = $("grid");
+    grid.innerHTML = "";
+
+    const query = view === "hidden" ? "?hidden=1" : `?kind=${view}`;
+    const r = await api("/api/items" + query);
+
+    if (!r.ok) return;
+
+    const items = await r.json();
+
+    if (!items.length) {
+      grid.className = "";
+      grid.innerHTML = '<div class="empty">No items available.</div>';
+      return;
+    }
+
+    grid.className = "grid";
+
+    for (const it of items) grid.appendChild(await makeCard(it));
+  }
+
+  async function makeCard(it) {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const thumb = document.createElement("div");
+    thumb.className = "thumb";
+    thumb.textContent = ICONS[it.kind] || "📄";
+
+    if (it.kind === "photo") {
+      const url = await blobUrl(it.id);
+
+      if (url) {
+        const img = new Image();
+        img.src = url;
+        thumb.textContent = "";
+        thumb.appendChild(img);
+      }
+    }
+
+    const name = document.createElement("div");
+    name.className = "nm";
+    name.textContent = it.name;
+    name.title = it.name;
+
+    const acts = document.createElement("div");
+    acts.className = "acts";
+
+    const openBtn = document.createElement("button");
+    openBtn.textContent = it.url ? "Open" : "View";
+    openBtn.onclick = () => openItem(it);
+
+    const hideBtn = document.createElement("button");
+    hideBtn.textContent = it.hidden ? "Unhide" : "Hide";
+    hideBtn.onclick = () => toggleHidden(it);
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Del";
+    delBtn.className = "red";
+    delBtn.onclick = () => deleteItem(it);
+
+    acts.append(openBtn, hideBtn, delBtn);
+    card.append(thumb, name, acts);
+
+    return card;
+  }
+
+  async function blobUrl(id) {
+    const r = await api(`/api/items/${id}/file`);
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  }
+
+  async function openItem(it) {
+    if (it.url) return window.open(it.url, "_blank", "noopener");
+
+    const url = await blobUrl(it.id);
+    if (!url) return;
+
+    if (it.kind === "app" || it.kind === "file") {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = it.name;
+      a.click();
+    } else {
+      window.open(url, "_blank");
+    }
+  }
+
+  async function toggleHidden(it) {
+    // App links do not contain files, so they only need to be shown or hidden.
+    if (it.url || !it.hidden) {
+      await api(`/api/items/${it.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden: !it.hidden })
+      });
+
+      return loadItems();
+    }
+
+    // Unhiding a hidden file means restoring it to its original location.
+    return restoreItem(it);
+  }
+
+  async function restoreItem(it) {
+    if (!confirm(`Do you want to restore "${it.name}" to its original location? It will be removed from the vault.`)) return;
+
+    $("status").textContent = "Restoring file...";
+
+    const r = await api(`/api/items/${it.id}/restore`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+
+    $("status").textContent = r.ok
+      ? "File restored to: " + data.restored_to
+      : "Error: " + (data.error || r.status);
+
+    loadItems();
+  }
+
+  async function deleteItem(it) {
+    if (!confirm(`Do you want to permanently delete "${it.name}"?`)) return;
+
+    await api(`/api/items/${it.id}`, { method: "DELETE" });
+    loadItems();
+  }
+
+  async function uploadFiles() {
+    const files = $("fileInput").files;
+
+    if (!files.length) return alert("Please select a file first.");
+
+    for (const f of files) {
+      const fd = new FormData();
+      fd.append("kind", view);
+      fd.append("file", f);
+
+      $("status").textContent = `Uploading: ${f.name}...`;
+
+      await api("/api/items", { method: "POST", body: fd });
+    }
+
+    $("fileInput").value = "";
+    $("status").textContent = "Upload completed.";
+    loadItems();
+  }
+
+  async function pickAndHide() {
+    $("status").textContent = "Please select a file...";
+
+    const pr = await api("/api/pick-file", { method: "POST" });
+    const pd = await pr.json().catch(() => ({}));
+
+    if (!pr.ok) return ($("status").textContent = "Error: " + (pd.error || pr.status));
+    if (!pd.path) return ($("status").textContent = "No file was selected.");
+
+    const kind = (view === "app" || view === "hidden") ? "file" : view;
+
+    if (!confirm(`This file will be moved to the vault and deleted from the PC:\n\n${pd.path}\n\nContinue?`)) {
+      return ($("status").textContent = "Operation cancelled.");
+    }
+
+    $("status").textContent = "Saving file in the vault...";
+
+    const r = await api("/api/import-path", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: pd.path, kind })
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (!r.ok) {
+      $("status").textContent = "Error: " + (data.error || r.status);
+    } else if (data.deleted_original) {
+      $("status").textContent = "File moved to the vault and deleted from the PC.";
+    } else {
+      $("status").textContent = data.warning;
+    }
+
+    loadItems();
+  }
+
+  async function addLink() {
+    const name = $("linkName").value.trim();
+    const url = $("linkUrl").value.trim();
+
+    if (!name || !url) return ($("status").textContent = "Please enter both the app name and link.");
+
+    await api("/api/links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, url })
+    });
+
+    $("linkName").value = "";
+    $("linkUrl").value = "";
+
+    $("status").textContent = "App link added successfully.";
+    loadItems();
+  }
+
+  // ----- Keyboard controls -----
+  document.addEventListener("keydown", (event) => {
+    if (!$("vault").classList.contains("hidden")) {
+      const typing = ["INPUT", "TEXTAREA"].includes(document.activeElement.tagName);
+
+      if (event.key === "Escape" && !typing) lockVault();
+      return;
+    }
+
+    const key = event.key;
+
+    if (!isNaN(key) && key !== " ") appendValue(key);
+    else if (["+", "-", "*", "/", "."].includes(key)) appendValue(key);
+    else if (key === "Enter") { event.preventDefault(); calculate(); }
+    else if (key === "Backspace") deleteLast();
+    else if (key === "Escape") clearDisplay();
+  });
+
+  checkStatus();
+</script>
+</body>
+</html>
